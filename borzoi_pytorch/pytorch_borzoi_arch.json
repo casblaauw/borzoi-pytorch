@@ -1,0 +1,150 @@
+{
+    "seq_length": 524288,
+    "augment_rc": true,
+    "augment_shift": 3,
+    "activation": "gelu",
+    "norm_type": "batch-sync",
+    "bn_momentum": 0.9,
+    "kernel_initializer": "lecun_normal",
+    "l2_scale": 2.0e-8,
+    "trunk":  {
+        "local": [
+                {
+                    "name": "Conv1D",
+                    "in_channels": 4,
+                    "out_channels": 512,
+                    "kernel_size": 15
+                },
+                {
+                    "name": "pooling",
+                    "type": "MaxPool1D",
+                    "pool_size": 2
+                },
+                {
+                    "name": "ConvBlockPool",
+                    "in_channels": 512,
+                    "out_channels": 608,
+                    "kernel_size": 5,
+                    "pool_size": 2
+                },
+                {
+                    "name": "ConvBlockPool",
+                    "in_channels": 608,
+                    "out_channels": 736,
+                    "kernel_size": 5,
+                    "pool_size": 2
+                },
+                {
+                    "name": "ConvBlockPool",
+                    "in_channels": 736,
+                    "out_channels": 896,
+                    "kernel_size": 5,
+                    "pool_size": 2
+                },
+                {
+                    "name": "ConvBlockPool",
+                    "in_channels": 896,
+                    "out_channels": 1056,
+                    "kernel_size": 5,
+                    "pool_size": 2
+                },
+                {
+                    "name": "ConvBlock",
+                    "in_channels": 1056,
+                    "out_channels": 1280,
+                    "kernel_size": 5
+                },
+                {
+                    "name": "pooling",
+                    "type": "MaxPool1D",
+                    "pool_size": 2
+                },
+                {
+                    "name": "ConvBlock",
+                    "in_channels": 1280,
+                    "out_channels": 1536,
+                    "kernel_size": 5
+                },
+                {
+                    "name": "pooling",
+                    "type": "MaxPool1D",
+                    "pool_size": 2
+                }
+            ],
+        "distal": [
+            {
+                "name": "transformer_tower",
+                "dim": 1536,
+                "key_size": 64,
+                "heads": 8,
+                "num_position_features": 32,
+                "dropout": 0.2,
+                "repeat": 8
+            }
+        ],
+        "final": [
+            {
+                "name": "fpn_unet",
+                "kernel_size": 3
+            },
+            {
+                "name": "fpn_unet",
+                "kernel_size": 3
+            },
+            {
+                "name": "TargetLengthCrop",
+                "target_length": 6144
+            },
+            {
+                "name": "ConvBlock",
+                "in_channels": 1536,
+                "out_channels": 1920,
+                "kernel_size": 1
+            },
+            {
+                "name": "Dropout", 
+                "p": 0.1
+            },
+            {
+                "name": "activation",
+                "type": "GELU"
+            }
+        ]
+    },
+    "heads": {
+        "head_human": [
+            {
+                "name": "Conv1D",
+                "in_channels": 1920,
+                "out_channels": 7611
+            }, 
+            {
+                "name": "activation",
+                "type": "softplus"
+            }
+        ],
+        "head_mouse": [
+            {
+                "name": "Conv1D",
+                "in_channels": 1920,
+                "out_channels": 2608
+            }, 
+            {
+                "name": "activation",
+                "type": "softplus"
+            }
+        ],
+        "head_new": [
+            {
+                "name": "Conv1D",
+                "in_channels": 1920,
+                "out_channels": 5
+            }, 
+            {
+                "name": "activation",
+                "type": "softplus"
+            }
+        ]
+    }
+}
+
