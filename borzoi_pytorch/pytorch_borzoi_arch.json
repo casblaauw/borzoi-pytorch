@@ -7,90 +7,108 @@
     "bn_momentum": 0.9,
     "kernel_initializer": "lecun_normal",
     "l2_scale": 2.0e-8,
-    "trunk":  {
-        "local": [
-                {
-                    "name": "Conv1D",
-                    "in_channels": 4,
-                    "out_channels": 512,
-                    "kernel_size": 15
-                },
-                {
-                    "name": "pooling",
-                    "type": "MaxPool1D",
-                    "pool_size": 2
-                },
-                {
-                    "name": "ConvBlockPool",
-                    "in_channels": 512,
-                    "out_channels": 608,
-                    "kernel_size": 5,
-                    "pool_size": 2
-                },
-                {
-                    "name": "ConvBlockPool",
-                    "in_channels": 608,
-                    "out_channels": 736,
-                    "kernel_size": 5,
-                    "pool_size": 2
-                },
-                {
-                    "name": "ConvBlockPool",
-                    "in_channels": 736,
-                    "out_channels": 896,
-                    "kernel_size": 5,
-                    "pool_size": 2
-                },
-                {
-                    "name": "ConvBlockPool",
-                    "in_channels": 896,
-                    "out_channels": 1056,
-                    "kernel_size": 5,
-                    "pool_size": 2
-                },
-                {
-                    "name": "ConvBlock",
-                    "in_channels": 1056,
-                    "out_channels": 1280,
-                    "kernel_size": 5
-                },
-                {
-                    "name": "pooling",
-                    "type": "MaxPool1D",
-                    "pool_size": 2
-                },
-                {
-                    "name": "ConvBlock",
-                    "in_channels": 1280,
-                    "out_channels": 1536,
-                    "kernel_size": 5
-                },
-                {
-                    "name": "pooling",
-                    "type": "MaxPool1D",
-                    "pool_size": 2
-                }
-            ],
-        "distal": [
+    "local": [
+        [
             {
-                "name": "transformer_tower",
-                "dim": 1536,
-                "key_size": 64,
-                "heads": 8,
-                "num_position_features": 32,
-                "dropout": 0.2,
-                "repeat": 8
+                "name": "Conv1D",
+                "in_channels": 4,
+                "out_channels": 512,
+                "kernel_size": 15
+            },
+            {
+                "name": "pooling",
+                "type": "max",
+                "pool_size": 2
+            },
+            {
+                "name": "ConvBlockPool",
+                "in_channels": 512,
+                "out_channels": 608,
+                "kernel_size": 5,
+                "pool_size": 2
+            },
+            {
+                "name": "ConvBlockPool",
+                "in_channels": 608,
+                "out_channels": 736,
+                "kernel_size": 5,
+                "pool_size": 2
+            },
+            {
+                "name": "ConvBlockPool",
+                "in_channels": 736,
+                "out_channels": 896,
+                "kernel_size": 5,
+                "pool_size": 2
+            },
+            {
+                "name": "ConvBlockPool",
+                "in_channels": 896,
+                "out_channels": 1056,
+                "kernel_size": 5,
+                "pool_size": 2
+            },
+            {
+                "name": "ConvBlock",
+                "in_channels": 1056,
+                "out_channels": 1280,
+                "kernel_size": 5
             }
         ],
-        "final": [
+        [
             {
-                "name": "fpn_unet",
-                "kernel_size": 3
+                "name": "pooling",
+                "type": "max",
+                "pool_size": 2
             },
             {
-                "name": "fpn_unet",
-                "kernel_size": 3
-            },
+                "name": "ConvBlock",
+                "in_channels": 1280,
+                "out_channels": 1536,
+                "kernel_size": 5
+            }
+        ],
+        [
+            {
+                "name": "pooling",
+                "type": "max",
+                "pool_size": 2
+            }
+        ]   
+        ],
+    "distal": [
+        {
+            "name": "transformer_tower",
+            "dim": 1536,
+            "key_size": 64,
+            "heads": 8,
+            "num_position_features": 32,
+            "dropout": 0.2,
+            "repeat": 8
+        }
+    ],
+    "final": [
+        [
+            {
+                "name": "Upscale",
+                "in_channels": 1536,
+                "horizontal_in_channels": 1280,
+                "intermed_channels": 1536,
+                "out_channels": 1536,
+                "kernel_size": 3 
+            }
+        ],
+        [
+            {
+                "name": "Upscale",
+                "in_channels": 1536,
+                "horizontal_in_channels": 1536,
+                "intermed_channels": 1536,
+                "out_channels": 1536,
+                "kernel_size": 3 
+            }
+        ],
+        [
             {
                 "name": "TargetLengthCrop",
                 "target_length": 6144
@@ -110,7 +128,8 @@
                 "type": "GELU"
             }
         ]
-    },
+        
+    ],
     "heads": {
         "head_human": [
             {

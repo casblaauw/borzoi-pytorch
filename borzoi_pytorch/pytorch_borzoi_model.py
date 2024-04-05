@@ -14,12 +14,9 @@
 # =========================================================================
 
 import numpy as np
-import torch
 from torch import nn
-
-
-
 from .pytorch_borzoi_transformer import Attention
+from typing import Union
 
 #torch.backends.cudnn.deterministic = True
 
@@ -60,19 +57,20 @@ class ConvBlock(nn.Module):
         return x
 
 class ConvBlockPool(ConvBlock):
-    """"A convolution+pooling block, including activation and normalisation pre-conv and max-pooling post-conv.
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, pool_size: int, activation: str = "gelu", pool: str = "maxpool1d", conv_type: str = "standard"):
+        """"A convolution+pooling block, including activation and normalisation pre-conv and max-pooling post-conv.
         
         Arguments:
         - in_channels: integer, number of input features. Should be number of preceding output channels/filters.
         - out_channels: integer, number of filters/kernels/out_channels.
         - kernel_size: integer, width of each filter.
         - pool_size: integer, width of the max pooling.
-        - activation: str, activation function to use. One of "gelu",  "relu", "linear", "softplus".
+        - activation: str, activation function to use. One of "gelu",  "relu", "linear", "softplus" (case-insensitive). 
+        - pool: str, pooling function to use. One of "max"/"maxpool1d" or "avg"/"avgpool1d" (case-insensitive).
         - conv_type: str, either "standard" or "separable".
         """
-    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, pool_size: int, activation: str = "gelu", conv_type: str = "standard"):
         super().__init__(in_channels = in_channels, out_channels = out_channels, kernel_size = kernel_size, activation = activation, conv_type = conv_type)
-        self.pool = nn.MaxPool1d(kernel_size = pool_size, padding = 0)
+        self.pool = get_pooling(type = pool, pool_size = pool_size)
     
     def forward(self, x):
         x = self.norm(x)
@@ -81,11 +79,54 @@ class ConvBlockPool(ConvBlock):
         x = self.pool(x)
         return x
 
+class Upscale(nn.Module):
+    def __init__(self, in_channels: int, horizontal_in_channels: int, intermed_channels: int, out_channels: int, kernel_size: int, activation: str = "gelu"):
+        """"An upscaling block, consisting of:
+         - a pointwise standard ConvBlock + Upscaling for the main input (x)
+         - a pointwise standard ConvBlock for the horizontal input (y)
+         - a separable ConvBlock for the summed inputs.
+        
+        Arguments:
+        - Pointwise ConvBlocks arguments:
+            - in_channels: integer, number of input features of the main input. Should be number of preceding output channels/filters.
+            - horizontal_in_channels: integer, number of input features of the horizontal/skip input. Should be number of preceding output channels/filters.
+            - intermed_channels: integer, output feature size of the pointwise ConvBlocks (which are input into separable ConvBlock).
+            - activation: str, activation function to use for the standard ConvBlocks. One of "gelu",  "relu", "linear", "softplus".
+        - Separable ConvBlock arguments:
+            - out_channels: integer, number of filters of the separable ConvBlock (and therefore of the output of this Upscale block).
+            - kernel_size: integer, width of the filters in the separable ConvBlock.
+        
+        """
+        super().__init__()
+        self.conv_input = ConvBlock(in_channels = in_channels, out_channels = intermed_channels, kernel_size = 1, activation = activation, conv_type = "standard")
+        self.upsample = nn.Upsample(scale_factor = 2)
+        self.conv_horizontal = ConvBlock(in_channels = horizontal_in_channels, out_channels = intermed_channels, kernel_size = 1, activation = activation, conv_type = "standard")
+        self.conv_sep = ConvBlock(in_channels = intermed_channels, out_channels = out_channels, kernel_size = kernel_size, conv_type = 'separable')
+
+    def forward(self, inputs):
+        x, y = inputs
+        x = self.conv_input(x)
+        x = self.upsample(x)
+        y = self.conv_horizontal(y)
+        x += y
+        x = self.conv_sep(x)
+        return x
 
 # --------- COMPONENT MODULES - distal ---------
     
-class Transformer(nn.Module):
-    def __init__(self, dim: int, key_size: int, heads: int, num_position_features: int, dropout: float, attention_dropout: float = 0.05, position_dropout : float = 0.01, **kwargs):
+class MHABlock(nn.Module):
+    def __init__(self, dim: int, key_size: int, heads: int, num_position_features: int, dropout: float, attention_dropout: float = 0.05, position_dropout: float = 0.01):
+        """MHA block (norm+MHA+dropout)
+
+        Arguments:
+        - dim: int, input/output channel size. Must be divisible by heads.
+        - key_size: int, key size for the attention layer. Value size is inferred from dim and n_heads (dim // heads).
+        - heads: int, number of heads in multi-head attention layer.
+        - num_position_features: int, number of relative positional features in the attention layer. 
+        - dropout: float, dropout to use in the separate dropout layer AFTER attention.
+        - attention_dropout: float, dropout to use for attention WITHIN the attention layer.
+        - position_dropout: float, dropout to use for position encoding WITHIN the attention layer.
+        """
         super().__init__()
         assert dim % heads == 0
         value_size = dim // heads
@@ -109,7 +150,13 @@ class Transformer(nn.Module):
         return x
 
 class FeedForward(nn.Module):
-    def __init__(self, dim: int, dropout: int, **kwargs):
+    def __init__(self, dim: int, dropout: int):
+        """Feedforward block for use with MHA in the Transformer architecture.
+        
+        Arguments:
+        - dim: int, input/output channel size.
+        - dropout: float, dropout to use.
+        """
         super().__init__()
         self.ln = nn.LayerNorm(dim, eps = 0.001),
         self.l1 = nn.Linear(dim, dim * 2),
@@ -126,38 +173,41 @@ class FeedForward(nn.Module):
         x = self.dropout(x)
         return x
     
-class TransformerFFN(nn.Module):
-    def __init__(self, **kwargs):
-        super().__init__()
-        self.transf = Transformer(**kwargs)
-        self.ff = FeedForward(**kwargs)
-    
-    def forward(self, x):
-        x = self.transf(x)
-        x = self.ff(x)
-        return x
-    
-# --------- COMPONENT MODULES - upsampling ---------
-class Upscale(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, activation: "gelu"):
-        """"xxx
+class Transformer(nn.Module):
+    def __init__(self, **kwargs): 
+        """Transformer (residual MHABlock + residual FFN) block. 
+        Arguments are the same as MHABlock, with dim and dropout also used for FeedForward.
         
         Arguments:
-        - xxx
+        - dim: int, input/output channel size. Must be divisible by heads.
+        - key_size: int, key size for the attention layer. Value size is inferred from dim and n_heads (dim // heads).
+        - heads: int, number of heads in multi-head attention layer.
+        - num_position_features: int, number of relative positional features in the attention layer. 
+        - dropout: float, dropout to use in the separate dropout layer AFTER attention and in the feedforward block.
+        - attention_dropout: float, dropout to use for attention WITHIN the attention layer.
+        - position_dropout: float, dropout to use for position encoding WITHIN the attention layer.
         """
         super().__init__()
-        self.conv_input = ConvBlock(in_channels = in_channels, out_channels = out_channels, kernel_size = kernel_size, activation = activation)
-        self.conv_horizontal = ConvBlock(in_channels = in_channels, out_channels = out_channels, kernel_size = kernel_size, activation = activation)
-
-    def forward(self, x, y):
-        x = self.conv_input(x)
-        y = self.conv_horizontal(y)
-
+        self.transf = MHABlock(**kwargs)
+        self.ff = FeedForward(dim = kwargs['dim'], dropout = kwargs['dropout'])
+    
+    def forward(self, x):
+        x2 = self.transf(x)
+        x += x2
+        x3 = self.ff(x)
+        x += x3
+        return x
+    
 
 # --------- COMPONENT MODULES - helper ---------
     
 class Residual(nn.Module):
     def __init__(self, fn):
+        """Residual module. Calculates fn(input) and returns input+fn(input).
+        
+        Arguments:
+        - fn: a callable, presumably a nn.Module-ish or nn.Sequential.
+        """
         super().__init__()
         self.fn = fn
 
@@ -165,12 +215,19 @@ class Residual(nn.Module):
         return self.fn(x, **kwargs) + x
     
 class TargetLengthCrop(nn.Module):
-    def __init__(self, target_length):
+    def __init__(self, target_length: int):
+        """"Cropping module.
+        Works in terms of kept bins (so convert from bp to bins).
+        Warning: Borzoi paper arch lists trimmed bins, so Crop(5120) = TargetLengthCrop(524288/32-2*5120) = TargetLengthCrop(6144)
+        
+        Arguments:
+        - target_length: int, number of bins in the center to keep. 
+        """
         super().__init__()
         self.target_length = target_length
 
     def forward(self, x):
-        seq_len, target_len = x.shape[-2], self.target_length
+        seq_len, target_len = x.shape[-1], self.target_length
         if target_len == -1:
             return x
         if seq_len < target_len:
@@ -178,57 +235,91 @@ class TargetLengthCrop(nn.Module):
         trim = (target_len - seq_len) // 2
         if trim == 0:
             return x
-        return x[:, -trim:trim]
+        return x[:, -trim:trim, :]
+        
 
 
 # --------- CONSTRUCTION FUNCTIONS ---------   
     
-def conv_tower(filters_init: int, filters_end: int, divisible_by: int, kernel_size: int, pool_size: int, repeat: int):
+def conv_tower(filters_init: int, filters_end: int, divisible_by: int, repeat: int, **kwargs):
+    """Helper function to create a convolution tower with exponentially shifting number of filters/channels.
+    Passes all extra arguments to ConvBlockPool.
+
+    Arguments:
+    - filters_init: int, 
+    - filters_end: int, 
+    - divisible_by: int,
+    - repeat: int, number of layers.
+    - **kwargs: passed on to ConvBlockPool. 
+        Required kwargs for ConvBlockPool: kernel_size: int, pool_size: int.
+        Optional kwargs for ConvBlockPool: activation: str = "gelu", conv_type: str = "standard"
+    
+    """
     filter_sizes = exponential_linspace_int(start = filters_init, end = filters_end, num = repeat+1, divisible_by = divisible_by)
     tower_list = [
-            ConvBlockPool(in_channels = in_channels, filters = out_channels, kernel_size = kernel_size, pool_size = pool_size)
+            ConvBlockPool(in_channels = in_channels, filters = out_channels, **kwargs)
             for i, (in_channels, out_channels) in enumerate(zip(filter_sizes[:-1, 1:]))
         ]
     return nn.Sequential(*tower_list)
     
 
-def transformer_tower(dim: int, key_size: int, heads: int, num_position_features: int, dropout: float, repeat: int):
+def transformer_tower(repeat: int, **kwargs):
+    """Helper function to create a transformer tower.
+    Passes all extra arguments to Transformer.
+    
+    Arguments;
+    - repeat: int, number of layers.
+    - **kwargs: passed on to Transformer.
+        Required kwargs: dim: int, key_size: int, heads: int, num_position_features: int, dropout: float
+        Optional kwargs: attention_dropout: float = 0.05, position_dropout: float = 0.01
+    """
     transformer_list = [
-        nn.Sequential(
-            Residual(Transformer(dim = dim, key_size = key_size, heads = heads, num_position_features = num_position_features, dropout = dropout)),
-            Residual(FeedForward(dim = dim, dropout = dropout)))
+        Transformer(**kwargs)
             for i in range(repeat)
     ]
     return nn.Sequential(*transformer_list)
             
 
-def get_activator(type: str):
-    if type.lower() == "gelu":
+def get_activator(type: str) -> nn.Module:
+    """Get the specified activation function module.
+    
+    Arguments:
+    - type: str, one of "gelu"/"relu"/"linear"/"softplus" (not case-sensitive).
+    """
+    type = type.lower()
+    if type == "gelu":
         return nn.GELU(approximate = 'tanh')
-    elif type.lower() == "relu":
+    elif type == "relu":
         return nn.RELU()
-    elif type.lower() == "linear":
+    elif type == "linear":
         return nn.Identity()
-    elif type.lower() == "softplus":
+    elif type == "softplus":
         return nn.Softplus()
     else:
         raise ValueError(f"Did not recognise activation function type {type}.")
     
-def get_pooling(type: str, pool_size: int):
-    if type.lower() == "maxpool1d":
+def get_pooling(type: str, pool_size: int) -> nn.Module:
+    """Get the specified pooling module.
+    
+    Arguments:
+    - type: str, one of "max"/"maxpool1d"/"avg"/"avgpool1d" (not case-sensitive).
+    """
+    type = type.lower()
+    if type == "maxpool1d" or type == "max":
         return nn.MaxPool1D(kernel_size = pool_size, padding = 0)
-    elif type.lower() == "avgpool1d":
+    elif type == "avgpool1d" or type == "avg":
         return nn.AvgPool1d(kernel_size = pool_size, padding = 0)
     else:
         raise ValueError(f"Did not recognise pooling function type {type}.")
-
 
 function_mapping = {
     "Conv1D": nn.Conv1D,
     "ConvBlock": ConvBlock,
     "ConvBlockPool": ConvBlockPool,
-    "Transformer": Transformer,
+    "Upscale": Upscale,
+    "MHABlock": MHABlock,
     "FeedForward": FeedForward,
+    "Transformer": Transformer,
     "TargetLengthCrop": TargetLengthCrop,
     "Dropout": nn.Dropout,
     "conv_tower": conv_tower,
@@ -236,6 +327,24 @@ function_mapping = {
     "activation": get_activator,
     "pooling": get_pooling
 }
+
+def build_block(block_params: dict) -> nn.Module:
+    """Build a block from a config.
+    Arguments:
+    - block_params: dict containing 'name' (function name in function_mapping) and block function arguments.
+    
+    Example: 
+    block_params = {
+        "name": "ConvBlock",
+        "in_channels": 1056,
+        "out_channels": 1280,
+        "kernel_size": 5
+    }
+    Which gets turned into:
+     function_mapping["ConvBlock"](...) -> ConvBlock(in_channels = 1056, out_channels = 1280, kernel_size = 5)
+    """
+    block_name = block_params.pop('name')
+    return function_mapping[block_name](**block_params)
 
 
 # --------- BORZOI OBJECT ---------    
@@ -246,123 +355,147 @@ class Borzoi(nn.Module):
         #TODO support RC and augs, add gradient functions, and much more
         #TODO rename layers to be understandable if I am feeling like adapting the state dict at some point
 
-        # TODO CAS: add variable num of heads (check modulelist)
         # TODO CAS: add named variables
-        # TODO CAS: add docs to all construction functions
-        # TODO CAS: add funcs to function_mapping
-        # TODO CAS: pick between get_activator and function_mapping approach in mapping
-        # TODO CAS: check transposing for attention layers
+        # TODO CAS: check batch norm
         # TODO CAS: deal with global params
-        # TODO CAS: deal with horizontal layers (hooks somehow?)
-        # TODO CAS: add separate load state dict
+        # TODO CAS: figure out how to put into self.trunk with horizontal passing? (or not possible)
+        # TODO CAS: add shape expectations to block docs
 
+        super().__init__()
 
-        super(Borzoi, self).__init__()
-        # self.conv_dna = ConvDna(filters = params['trunk']['filters'], kernel_size = 15, pool_size = 2)
-        # self.conv_tower = conv_tower()
-        self.local = nn.Sequential(*[build_block(block_params) for block_params in params['trunk']['local']])
-        self.distal = nn.Sequential(*[build_block(block_params) for block_params in params['trunk']['distal']])
-        self.final = nn.Sequential(*[build_block(block_params) for block_params in params['trunk']['final']])
-        self.heads = nn.ModuleList(build_block(head_params) for head_params in params['heads'])
+        # Build local (conv tower)
+        self.add_unit('local', params['local'])
 
-        self.trunk = nn.Sequential(self.local, self.distal, self.final)
+        # Build distal (transformer tower)
+        self.add_unit('distal', params['distal'])
 
-        # self._max_pool = nn.MaxPool1d(kernel_size = 2, padding = 0)
-        # filter_list = exponential_linspace_int(start=filters_init, end=filters_end, num=repeat, divisible_by=divisible_by)
-        # self.res_tower = nn.Sequential(
-        #     ConvBlock(in_channels = 512, filters = 608, kernel_size = 5),
-        #     self._max_pool,
-        #     ConvBlock(in_channels = 608, filters = 736, kernel_size = 5),
-        #     self._max_pool,
-        #     ConvBlock(in_channels = 736, filters = 896, kernel_size = 5),
-        #     self._max_pool,
-        #     ConvBlock(in_channels = 896, filters = 1056, kernel_size = 5),
-        #     self._max_pool,
-        #     ConvBlock(in_channels = 1056, filters = 1280, kernel_size = 5)
-        # )
-        self.unet1 = nn.Sequential(
-            self._max_pool,
-            ConvBlock(in_channels = 1280, out_channels = 1536, kernel_size = 5)
-        )
-        # transformer = []
-        # for _ in range(8):
-        #     transformer.append(nn.Sequential(
-        #         Residual(nn.Sequential(
-        #             nn.LayerNorm(1536, eps = 0.001),
-        #             Attention(
-        #                 1536,
-        #                 heads = 8,
-        #                 dim_key = 64,
-        #                 dim_value = 192,
-        #                 dropout = 0.05,
-        #                 pos_dropout = 0.01,
-        #                 num_rel_pos_features = 32
-        #             ),
-        #             nn.Dropout(0.2))
-        #         ),
-        #         Residual(nn.Sequential(
-        #             nn.LayerNorm(1536, eps = 0.001),
-        #             nn.Linear(1536, 1536 * 2),
-        #             nn.Dropout(0.2),
-        #             nn.ReLU(),
-        #             nn.Linear(1536 * 2, 1536),
-        #             nn.Dropout(0.2)
-        #         )))
-        #     )
-        self.horizontal_conv0 = ConvBlock(in_channels = 1280, out_channels = 1536, kernel_size = 1)
-        self.horizontal_conv1 = ConvBlock(in_channels = 1536, out_channels = 1536, kernel_size = 1)
-        self.upsample = torch.nn.Upsample(scale_factor = 2)
-        # self.transformer = nn.Sequential(*transformer)
-        self.upsampling_unet1 = nn.Sequential(
-            ConvBlock(in_channels = 1536, out_channels = 1536, kernel_size = 1),
-            self.upsample,
-        )
-        self.separable1 = ConvBlock(in_channels = 1536, out_channels = 1536,  kernel_size = 3, conv_type = 'separable')
-        self.upsampling_unet0 = nn.Sequential(
-            ConvBlock(in_channels = 1536, out_channels = 1536, kernel_size = 1),
-            self.upsample,
-        )
-        self.separable0 = ConvBlock(in_channels = 1536, out_channels = 1536,  kernel_size = 3, conv_type = 'separable')
-        # self.crop = TargetLengthCrop(16384-32)
-        # self.final_joined_convs = nn.Sequential(
-        #     ConvBlock(in_channels = 1536, out_channels = 1920, kernel_size = 1),
-        #     nn.Dropout(0.1),
-        #     nn.GELU(approximate='tanh'),
-        # )
-        # self.human_head = nn.Conv1d(in_channels = 1920, out_channels = 7611, kernel_size = 1)
-        # if self.enable_mouse_head:
-        #     self.mouse_head = nn.Conv1d(in_channels = 1920, out_channels = 2608, kernel_size = 1)
-        # self.final_softplus = nn.Softplus()
+        # Build final of trunk (Upsampling/crop/pointwise)
+        self.add_unit('final', params['final'])
 
-        # self.load_state_dict(torch.load(checkpoint_path))
+        # Build heads
+        self.heads = nn.ModuleList()
+        for head_name, head_params in params['heads']:
+            self.add_unit(head_name, head_params)
+            self.heads.append(getattr(self, head_name))
+    
+    def add_unit(self, name: str, unit_params: Union[dict, list[Union[dict, list[dict]]]]):
+        """Function to build a borzoi trunk subunit (local/distal/final).
+        Adds self.{name} to the model object as a Sequential.
+        If the subunit has sublists, those are also made individual Sequentials and saved to self.{name}_list, with self.name as a wrapper.
+        This allows for both intermediate output access (by indexing into self.{name}_list) and final output (by using self.{name})
+
+        Arguments:
+        - name: str, under which name this unit should be added to the model object.
+        - unit_params: dict or list, containing the parameters from that unit, from the params json.
+            If a dict (single layer), the single layer is made with build_block. 
+            If a list of dicts (list of layers), individual blocks are directly passed to build_block and made Sequential.
+            If a list of list of dicts (list of list of layers), the sublists are processed into Sequentials, 
+                saved as a ModuleList, and grouped into a big Sequential.
+
+        Single-layer example:
+        layer_config = {
+            "name": "ConvBlock",
+            "in_channels": 512,
+            "out_channels": 512,
+            "kernel_size": 5
+        }
+        self.add_unit('test', layer_config) -> 
+            self.test = ConvBlock
+
+        Multi-layer example:
+        list_config = [
+            layer_config,
+            layer_config
+        ]
+        self.add_unit('test', list_config) -> 
+            self.test = nn.Sequential(ConvBlock, ConvBlock)
+
+        Sublist example:
+        sublist_config = [
+            [
+                layer_config,
+                layer_config
+            ],
+            [
+                layer_config
+            ]
+        ] 
+        self.add_unit('test', sublist_config) -> 
+            self.test_list = nn.ModuleList([nn.Sequential(ConvBlock, ConvBlock), nn.Sequential(ConvBlock)]) 
+            self.test = nn.Sequential(nn.Sequential(ConvBlock, ConvBlock), nn.Sequential(ConvBlock))
+        """
+        # Single layer config:
+        # Build as single layer
+        if isinstance(unit_params, dict):
+            self.__setattr__(
+                name,
+                build_block(unit_params)
+            )
+        # List of multiple layer configs:
+        else:
+            # List of configs: 
+            # just build into sequential directly
+            if isinstance(unit_params[0], dict):
+                self.__setattr__(
+                    name,
+                    nn.Sequential(*[build_block(block_params) for block_params in unit_params])
+                )
+
+            # List of sublists with configs:
+            # Save as separate sequentials to self.xxx_list (to allow intermediate access for horizontal layers)
+            elif isinstance(unit_params[0], list):
+                # Build sequential for each sublist
+                sublist_sequentials = []
+                for block_params_list in unit_params:
+                    sublist_sequentials.append(nn.Sequential(*[build_block(block_params) for block_params in block_params_list]))
+                
+                # Save list of sequentials as ModuleList
+                self.__setattr__(
+                    f"{name}_list",
+                    nn.ModuleList(sublist_sequentials)
+                )
+                # Unpack and save total unit as Sequential
+                self.__setattr__(
+                    name,
+                    nn.Sequential(*sublist_sequentials)
+                )
+            else:
+                ValueError(f"Did not recognise config as list of blocks or list of sublists of blocks. Tested params block: {unit_params[0]}")
+                
         
     def forward(self, x):
-        # x = self.conv_dna(x)
-        # x_unet0 = self.res_tower(x)
-        # x_unet1 = self.unet1(x_unet0)
-        # x = self._max_pool(x_unet1)
-        # x_unet1 = self.horizontal_conv1(x_unet1)
-        # x_unet0 = self.horizontal_conv0(x_unet0)
-        # x = self.transformer(x.permute(0,2,1))
-        # x = x.permute(0,2,1)
-        # x = self.upsampling_unet1(x)
-        # x += x_unet1
-        # x = self.separable1(x)
-        # x = self.upsampling_unet0(x)
-        # x += x_unet0
-        # x = self.separable0(x)
-        # x = self.crop(x.permute(0,2,1))
-        # x = self.final_joined_convs(x.permute(0,2,1))
-        
-        # Trunk
-        x, skip = self.local(x)
+        # Pass through local, saving skip/horizontal tensors
+        skip1 = self.local_list[0](x)
+        skip2 = self.local_list[1](x)
+        x = self.local_list[2](x)
+
+        # Pass through transformer layer
+        x = x.permute(0,2,1)
         x = self.distal(x)
-        x = self.final(x, skip)
+        x = x.permute(0,2,1)
+        
+        # Pass through final, inserting skip/horizontal tensors
+        x = self.final_list[0]((x, skip2))
+        x = self.final_list[1]((x, skip1))
+        x = self.final_list[2](x)
 
         # Head
         return (head(x) for head in self.heads)
-        
-
+    
+    def forward_trunk(self, x):
+        # Local
+        skip1 = self.local_list[0](x)
+        skip2 = self.local_list[1](x)
+        x = self.local_list[2](x)
+        # Distal
+        x = x.permute(0,2,1)
+        x = self.distal(x)
+        x = x.permute(0,2,1)
+        # Final
+        x = self.final_list[0]((x, skip2))
+        x = self.final_list[1]((x, skip1))
+        x = self.final_list[2](x)
+        return x
         
 # --------- MISC FUNCTIONS ---------  
 
