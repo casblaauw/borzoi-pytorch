@@ -24,15 +24,22 @@ from typing import Union
   
 # --------- COMPONENT MODULES - local ---------
 class ConvBlock(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, activation: str = "gelu", conv_type: str = "standard"):
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, activation: str = "gelu", norm: str = "batchnorm", conv_type: str = "standard"):
         """"A convolution block, including activation and normalisation.
         
         Arguments:
-        - in_channels: integer, number of input features. Should be number of preceding output channels/filters.
+        - in_channels: integer, number of input features. 
+            Should be number of preceding output channels/filters.
         - out_channels: integer, number of filters/kernels/out_channels.
         - kernel_size: integer, width of each filter.
-        - activation: str, activation function to use. Only used with conv_type "standard".  One of "gelu",  "relu", "linear", "softplus".
-        - conv_type: str, either "standard" or "separable".
+        - activation: optional str, activation function to use. 
+            Only used with conv_type "standard". 
+            One of "gelu",  "relu", "linear", "softplus".
+            Default: "gelu".
+        - norm: optional str, type of normalisation to use, either "batchnorm" or "layernorm". 
+            Default: "batchnorm".
+        - conv_type: optional str, either "standard" or "separable".
+            Default: "standard".
         """
         super().__init__()
         if conv_type == "separable":
@@ -42,8 +49,8 @@ class ConvBlock(nn.Module):
             self.conv_layer = nn.Sequential(depthwise_conv, pointwise_conv)
             self.activation = nn.Identity()
         else:
-            self.norm = nn.BatchNorm1d(in_channels, eps = 0.001)
-            self.activation = get_activator(activation)
+            self.norm = get_norm(norm, in_channels = in_channels, eps = 0.001)
+            self.activation = get_activation(activation)
             self.conv_layer = nn.Conv1d(
                 in_channels, 
                 out_channels, 
@@ -57,19 +64,29 @@ class ConvBlock(nn.Module):
         return x
 
 class ConvBlockPool(ConvBlock):
-    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, pool_size: int, activation: str = "gelu", pool: str = "maxpool1d", conv_type: str = "standard"):
+    def __init__(self, **kwargs):
         """"A convolution+pooling block, including activation and normalisation pre-conv and max-pooling post-conv.
         
         Arguments:
-        - in_channels: integer, number of input features. Should be number of preceding output channels/filters.
+        - in_channels: integer, number of input features. 
+            Should be number of preceding output channels/filters.
         - out_channels: integer, number of filters/kernels/out_channels.
         - kernel_size: integer, width of each filter.
         - pool_size: integer, width of the max pooling.
-        - activation: str, activation function to use. One of "gelu",  "relu", "linear", "softplus" (case-insensitive). 
-        - pool: str, pooling function to use. One of "max"/"maxpool1d" or "avg"/"avgpool1d" (case-insensitive).
-        - conv_type: str, either "standard" or "separable".
+        - activation: str, activation function to use. 
+            One of "gelu",  "relu", "linear", "softplus" (case-insensitive). 
+            Only used with conv_type "standard". 
+            Default: "gelu".
+        - norm: optional str, type of normalisation to use, either "batchnorm" or "layernorm". 
+            Default: "batchnorm".
+        - pool: optional str, pooling function to use. 
+            One of "max"/"maxpool1d" or "avg"/"avgpool1d" (case-insensitive). 
+            Default: "maxpool1d".
+        - conv_type: optional str, either "standard" or "separable".
+            Default: "standard".
         """
-        super().__init__(in_channels = in_channels, out_channels = out_channels, kernel_size = kernel_size, activation = activation, conv_type = conv_type)
+        pool, pool_size = kwargs.pop('pool'), kwargs.pop('pool_size')
+        super().__init__(**kwargs)
         self.pool = get_pooling(type = pool, pool_size = pool_size)
     
     def forward(self, x):
@@ -80,7 +97,7 @@ class ConvBlockPool(ConvBlock):
         return x
 
 class Upscale(nn.Module):
-    def __init__(self, in_channels: int, horizontal_in_channels: int, intermed_channels: int, out_channels: int, kernel_size: int, activation: str = "gelu"):
+    def __init__(self, in_channels: int, horizontal_in_channels: int, intermed_channels: int, out_channels: int, kernel_size: int, activation: str = "gelu", norm: str = "batchnorm"):
         """"An upscaling block, consisting of:
          - a pointwise standard ConvBlock + Upscaling for the main input (x)
          - a pointwise standard ConvBlock for the horizontal input (y)
@@ -88,19 +105,23 @@ class Upscale(nn.Module):
         
         Arguments:
         - Pointwise ConvBlocks arguments:
-            - in_channels: integer, number of input features of the main input. Should be number of preceding output channels/filters.
-            - horizontal_in_channels: integer, number of input features of the horizontal/skip input. Should be number of preceding output channels/filters.
+            - in_channels: integer, number of input features of the main input. 
+                Should be number of preceding output channels/filters.
+            - horizontal_in_channels: integer, number of input features of the horizontal/skip input. 
+                Should be number of preceding output channels/filters.
             - intermed_channels: integer, output feature size of the pointwise ConvBlocks (which are input into separable ConvBlock).
-            - activation: str, activation function to use for the standard ConvBlocks. One of "gelu",  "relu", "linear", "softplus".
+            - activation: optional str, activation function to use for the standard ConvBlocks. 
+                One of "gelu",  "relu", "linear", "softplus".
+                Default: "gelu".
         - Separable ConvBlock arguments:
             - out_channels: integer, number of filters of the separable ConvBlock (and therefore of the output of this Upscale block).
             - kernel_size: integer, width of the filters in the separable ConvBlock.
         
         """
         super().__init__()
-        self.conv_input = ConvBlock(in_channels = in_channels, out_channels = intermed_channels, kernel_size = 1, activation = activation, conv_type = "standard")
+        self.conv_input = ConvBlock(in_channels = in_channels, out_channels = intermed_channels, kernel_size = 1, activation = activation, norm = norm, conv_type = "standard")
         self.upsample = nn.Upsample(scale_factor = 2)
-        self.conv_horizontal = ConvBlock(in_channels = horizontal_in_channels, out_channels = intermed_channels, kernel_size = 1, activation = activation, conv_type = "standard")
+        self.conv_horizontal = ConvBlock(in_channels = horizontal_in_channels, out_channels = intermed_channels, kernel_size = 1, activation = activation, norm = norm, conv_type = "standard")
         self.conv_sep = ConvBlock(in_channels = intermed_channels, out_channels = out_channels, kernel_size = kernel_size, conv_type = 'separable')
 
     def forward(self, inputs):
@@ -115,7 +136,7 @@ class Upscale(nn.Module):
 # --------- COMPONENT MODULES - distal ---------
     
 class MHABlock(nn.Module):
-    def __init__(self, dim: int, key_size: int, heads: int, num_position_features: int, dropout: float, attention_dropout: float = 0.05, position_dropout: float = 0.01):
+    def __init__(self, dim: int, key_size: int, heads: int, num_position_features: int, dropout: float, attention_dropout: float = 0.05, position_dropout: float = 0.01, norm =  "layernorm"):
         """MHA block (norm+MHA+dropout)
 
         Arguments:
@@ -124,14 +145,19 @@ class MHABlock(nn.Module):
         - heads: int, number of heads in multi-head attention layer.
         - num_position_features: int, number of relative positional features in the attention layer. 
         - dropout: float, dropout to use in the separate dropout layer AFTER attention.
-        - attention_dropout: float, dropout to use for attention WITHIN the attention layer.
-        - position_dropout: float, dropout to use for position encoding WITHIN the attention layer.
+        - attention_dropout: optional float, dropout to use for attention WITHIN the attention layer.
+            Default: 0.05.
+        - position_dropout: optional float, dropout to use for position encoding WITHIN the attention layer.
+            Default: 0.01.
+        - norm: optional str, type of normalisation to use, either "layernorm" or "batchnorm". 
+            Default: "layernorm", as in Borzoi and original Transformer paper.
         """
         super().__init__()
         assert dim % heads == 0
         value_size = dim // heads
 
-        self.norm = nn.LayerNorm(dim, eps = 0.001),
+        # self.norm = nn.LayerNorm(dim, eps = 0.001),
+        self.norm = get_norm(type = norm, in_channels = dim, eps = 0.001)
         self.attention = Attention(
                     dim = dim,
                     heads = heads,
@@ -150,22 +176,26 @@ class MHABlock(nn.Module):
         return x
 
 class FeedForward(nn.Module):
-    def __init__(self, dim: int, dropout: int):
+    def __init__(self, dim: int, dropout: int, activation: str = "relu", norm: str = "layernorm"):
         """Feedforward block for use with MHA in the Transformer architecture.
         
         Arguments:
         - dim: int, input/output channel size.
         - dropout: float, dropout to use.
+        - activation: optional str, one of "gelu"/"relu"/"linear"/"softplus".
+            Default is "relu", as in Borzoi and original Transformer paper.
+        - norm: optional str, either "layernorm"/"batchnorm".
+            Default is "layernorm", as in Borzoi and original Transformer paper.
         """
         super().__init__()
-        self.ln = nn.LayerNorm(dim, eps = 0.001),
+        self.norm = get_norm(norm, in_channels = dim, eps = 0.001)
         self.l1 = nn.Linear(dim, dim * 2),
         self.dropout = nn.Dropout(dropout),
-        self.activation = nn.ReLU(),
+        self.activation = get_activation(activation)
         self.l2 = nn.Linear(dim * 2, dim),
 
     def forward(self, x):
-        x = self.ln(x)
+        x = self.norm(x)
         x = self.l1(x)
         x = self.dropout(x)
         x = self.activation(x)
@@ -186,10 +216,12 @@ class Transformer(nn.Module):
         - dropout: float, dropout to use in the separate dropout layer AFTER attention and in the feedforward block.
         - attention_dropout: float, dropout to use for attention WITHIN the attention layer.
         - position_dropout: float, dropout to use for position encoding WITHIN the attention layer.
+        - norm: optional str, norm to use in BOTH MHA and FFN blocks, either "layernorm"/"batchnorm".
+            Default is "layernorm", as in Borzoi and original Transformer paper. 
         """
         super().__init__()
         self.transf = MHABlock(**kwargs)
-        self.ff = FeedForward(dim = kwargs['dim'], dropout = kwargs['dropout'])
+        self.ff = FeedForward(dim = kwargs['dim'], dropout = kwargs['dropout'], norm = kwargs['norm'])
     
     def forward(self, x):
         x2 = self.transf(x)
@@ -218,7 +250,8 @@ class TargetLengthCrop(nn.Module):
     def __init__(self, target_length: int):
         """"Cropping module.
         Works in terms of kept bins (so convert from bp to bins).
-        Warning: Borzoi paper arch lists trimmed bins, so Crop(5120) = TargetLengthCrop(524288/32-2*5120) = TargetLengthCrop(6144)
+        Warning: Borzoi paper arch lists trimmed bins, so:
+            Crop(5120) = TargetLengthCrop(524288/32-2*5120) = TargetLengthCrop(6144)
         
         Arguments:
         - target_length: int, number of bins in the center to keep. 
@@ -280,7 +313,7 @@ def transformer_tower(repeat: int, **kwargs):
     return nn.Sequential(*transformer_list)
             
 
-def get_activator(type: str) -> nn.Module:
+def get_activation(type: str) -> nn.Module:
     """Get the specified activation function module.
     
     Arguments:
@@ -311,6 +344,24 @@ def get_pooling(type: str, pool_size: int) -> nn.Module:
         return nn.AvgPool1d(kernel_size = pool_size, padding = 0)
     else:
         raise ValueError(f"Did not recognise pooling function type {type}.")
+    
+def get_norm(type: str, in_channels: int, eps: float = 0.001):
+    """Get the specified normalisation module.
+
+    Arguments:
+    - type: str, one of "batch"/"batchnorm"/"batchnorm1d"/"batch-norm" or "layer"/"layernorm"/"layer-norm"
+    - in_channels: int, the number of input channels.
+    - eps: optional float, value added to the denominator for numerical stability.
+        Default: 0.001
+    """
+    type = type.lower()
+    if type in ["batch", "batchnorm", "batchnorm1d", "batch-norm"]:
+        return nn.BatchNorm1d(in_channels, eps = eps)
+    elif type in ["layer, layernorm", "layer-norm"]:
+        return nn.LayerNorm(in_channels, eps = eps)
+    else:
+        raise ValueError(f"Did not recognise norm function type {type}.")
+
 
 function_mapping = {
     "Conv1D": nn.Conv1D,
@@ -324,8 +375,9 @@ function_mapping = {
     "Dropout": nn.Dropout,
     "conv_tower": conv_tower,
     "transformer_tower": transformer_tower,
-    "activation": get_activator,
-    "pooling": get_pooling
+    "activation": get_activation,
+    "pooling": get_pooling,
+    "norm": get_norm
 }
 
 def build_block(block_params: dict) -> nn.Module:
@@ -356,7 +408,6 @@ class Borzoi(nn.Module):
         #TODO rename layers to be understandable if I am feeling like adapting the state dict at some point
 
         # TODO CAS: add named variables
-        # TODO CAS: check batch norm
         # TODO CAS: deal with global params
         # TODO CAS: figure out how to put into self.trunk with horizontal passing? (or not possible)
         # TODO CAS: add shape expectations to block docs
