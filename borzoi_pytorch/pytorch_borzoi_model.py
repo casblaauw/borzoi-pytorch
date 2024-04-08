@@ -408,9 +408,9 @@ class Borzoi(nn.Module):
         #TODO rename layers to be understandable if I am feeling like adapting the state dict at some point
 
         # TODO CAS: add named variables
-        # TODO CAS: deal with global params
-        # TODO CAS: figure out how to put into self.trunk with horizontal passing? (or not possible)
         # TODO CAS: add shape expectations to block docs
+
+        # Things currently not supported: layer-specific regularisation, separate initializers, global activation/norm_type/bn_momentum setting
 
         super().__init__()
 

@@ -1,12 +1,4 @@
 {
-    "seq_length": 524288,
-    "augment_rc": true,
-    "augment_shift": 3,
-    "activation": "gelu",
-    "norm_type": "batch-sync",
-    "bn_momentum": 0.9,
-    "kernel_initializer": "lecun_normal",
-    "l2_scale": 2.0e-8,
     "local": [
         [
             {
