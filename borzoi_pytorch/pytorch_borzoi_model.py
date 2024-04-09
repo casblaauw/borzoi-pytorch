@@ -156,7 +156,7 @@ class MHABlock(nn.Module):
                     dropout = attention_dropout,
                     pos_dropout = position_dropout,
                     num_rel_pos_features = num_position_features
-                ),
+                )
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
@@ -179,10 +179,10 @@ class FeedForward(nn.Module):
         """
         super().__init__()
         self.norm = get_norm(norm, in_channels = dim, eps = 0.001)
-        self.l1 = nn.Linear(dim, dim * 2),
-        self.dropout = nn.Dropout(dropout),
+        self.l1 = nn.Linear(dim, dim * 2)
+        self.dropout = nn.Dropout(dropout)
         self.activation = get_activation(activation)
-        self.l2 = nn.Linear(dim * 2, dim),
+        self.l2 = nn.Linear(dim * 2, dim)
 
     def forward(self, x):
         x = self.norm(x)
@@ -206,12 +206,10 @@ class Transformer(nn.Module):
         - dropout: float, dropout to use in the separate dropout layer AFTER attention and in the feedforward block.
         - attention_dropout: float, dropout to use for attention WITHIN the attention layer.
         - position_dropout: float, dropout to use for position encoding WITHIN the attention layer.
-        - norm: optional str, norm to use in BOTH MHA and FFN blocks, either "layernorm"/"batchnorm".
-            Default is "layernorm", as in Borzoi and original Transformer paper. 
         """
         super().__init__()
         self.transf = MHABlock(**kwargs)
-        self.ff = FeedForward(dim = kwargs['dim'], dropout = kwargs['dropout'], norm = kwargs['norm'])
+        self.ff = FeedForward(dim = kwargs['dim'], dropout = kwargs['dropout'])
     
     def forward(self, x):
         x2 = self.transf(x)
@@ -313,7 +311,7 @@ def get_activation(type: str) -> nn.Module:
     if type == "gelu":
         return nn.GELU(approximate = 'tanh')
     elif type == "relu":
-        return nn.RELU()
+        return nn.ReLU()
     elif type == "linear":
         return nn.Identity()
     elif type == "softplus":
@@ -329,7 +327,7 @@ def get_pooling(type: str, pool_size: int) -> nn.Module:
     """
     type = type.lower()
     if type == "maxpool1d" or type == "max":
-        return nn.MaxPool1D(kernel_size = pool_size, padding = 0)
+        return nn.MaxPool1d(kernel_size = pool_size, padding = 0)
     elif type == "avgpool1d" or type == "avg":
         return nn.AvgPool1d(kernel_size = pool_size, padding = 0)
     else:
@@ -347,14 +345,14 @@ def get_norm(type: str, in_channels: int, eps: float = 0.001):
     type = type.lower()
     if type in ["batch", "batchnorm", "batchnorm1d", "batch-norm"]:
         return nn.BatchNorm1d(in_channels, eps = eps)
-    elif type in ["layer, layernorm", "layer-norm"]:
+    elif type in ["layer", "layernorm", "layer-norm"]:
         return nn.LayerNorm(in_channels, eps = eps)
     else:
         raise ValueError(f"Did not recognise norm function type {type}.")
 
 
 function_mapping = {
-    "Conv1D": nn.Conv1D,
+    "Conv1d": nn.Conv1d,
     "ConvBlock": ConvBlock,
     "ConvBlockPool": ConvBlockPool,
     "Upscale": Upscale,
@@ -416,7 +414,7 @@ class Borzoi(nn.Module):
 
         # Build heads
         self.heads = nn.ModuleList()
-        for head_name, head_params in params['heads']:
+        for head_name, head_params in params['heads'].items():
             self.add_unit(head_name, head_params)
             self.heads.append(getattr(self, head_name))
     
