@@ -64,28 +64,18 @@ class ConvBlock(nn.Module):
         return x
 
 class ConvBlockPool(ConvBlock):
-    def __init__(self, **kwargs):
+    def __init__(self, pool_size: int, pool: str = "maxpool1d", **kwargs):
         """"A convolution+pooling block, including activation and normalisation pre-conv and max-pooling post-conv.
         
         Arguments:
-        - in_channels: integer, number of input features. 
-            Should be number of preceding output channels/filters.
-        - out_channels: integer, number of filters/kernels/out_channels.
-        - kernel_size: integer, width of each filter.
         - pool_size: integer, width of the max pooling.
-        - activation: str, activation function to use. 
-            One of "gelu",  "relu", "linear", "softplus" (case-insensitive). 
-            Only used with conv_type "standard". 
-            Default: "gelu".
-        - norm: optional str, type of normalisation to use, either "batchnorm" or "layernorm". 
-            Default: "batchnorm".
         - pool: optional str, pooling function to use. 
             One of "max"/"maxpool1d" or "avg"/"avgpool1d" (case-insensitive). 
             Default: "maxpool1d".
-        - conv_type: optional str, either "standard" or "separable".
-            Default: "standard".
+        - **kwargs: passed on to ConvBlock. 
+            Required kwargs for ConvBlock: in_channels: int, out_channels: int, kernel_size: int
+            Optional kwargs for ConvBlock: activation: str = "gelu", norm: str = "batchnorm", conv_type: str = "standard"
         """
-        pool, pool_size = kwargs.pop('pool'), kwargs.pop('pool_size')
         super().__init__(**kwargs)
         self.pool = get_pooling(type = pool, pool_size = pool_size)
     
@@ -409,6 +399,7 @@ class Borzoi(nn.Module):
 
         # TODO CAS: add named variables
         # TODO CAS: add shape expectations to block docs
+        # TODO CAS: move required kwargs to actual params
 
         # Things currently not supported: layer-specific regularisation, separate initializers, global activation/norm_type/bn_momentum setting
 
