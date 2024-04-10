@@ -84,7 +84,7 @@
             {
                 "name": "Upscale",
                 "in_channels": 1536,
-                "horizontal_in_channels": 1280,
+                "horizontal_in_channels": 1536,
                 "intermed_channels": 1536,
                 "out_channels": 1536,
                 "kernel_size": 3 
@@ -94,7 +94,7 @@
             {
                 "name": "Upscale",
                 "in_channels": 1536,
-                "horizontal_in_channels": 1536,
+                "horizontal_in_channels": 1280,
                 "intermed_channels": 1536,
                 "out_channels": 1536,
                 "kernel_size": 3 
