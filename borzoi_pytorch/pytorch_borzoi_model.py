@@ -258,7 +258,7 @@ class TargetLengthCrop(nn.Module):
         trim = (target_len - seq_len) // 2
         if trim == 0:
             return x
-        return x[:, -trim:trim, :]
+        return x[:, :, -trim:trim]
         
 
 
@@ -403,9 +403,7 @@ class Borzoi(nn.Module):
             
         """
         #TODO support RC and augs, add gradient functions, and much more
-        #TODO rename layers to be understandable if I am feeling like adapting the state dict at some point
 
-        # TODO CAS: add named variables
         # TODO CAS: add shape expectations to block docs
         # TODO CAS: move required kwargs to actual params
 
@@ -415,6 +413,8 @@ class Borzoi(nn.Module):
 
         if isinstance(params, str):
             params = json.load(params)
+        
+        assert all(part in params for part in ['local', 'distal', 'final', 'heads']), "Params should contain 'local'/'distal'/'final'/'heads'."
 
         # Build local (conv tower)
         self.add_unit('local', params['local'])
@@ -519,10 +519,11 @@ class Borzoi(nn.Module):
                 
         
     def forward(self, x):
+        """Forward pass through the model. Always assumes (batch, )"""
         # Pass through local, saving skip/horizontal tensors
         skip1 = self.local_list[0](x)
-        skip2 = self.local_list[1](x)
-        x = self.local_list[2](x)
+        skip2 = self.local_list[1](skip1)
+        x = self.local_list[2](skip2)
 
         # Pass through transformer layer
         x = x.permute(0,2,1)
@@ -535,13 +536,13 @@ class Borzoi(nn.Module):
         x = self.final_list[2](x)
 
         # Head
-        return (head(x) for head in self.heads)
+        return [head(x) for head in self.heads]
     
     def forward_trunk(self, x):
         # Local
         skip1 = self.local_list[0](x)
-        skip2 = self.local_list[1](x)
-        x = self.local_list[2](x)
+        skip2 = self.local_list[1](skip1)
+        x = self.local_list[2](skip2)
         # Distal
         x = x.permute(0,2,1)
         x = self.distal(x)
