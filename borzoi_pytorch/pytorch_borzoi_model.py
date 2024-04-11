@@ -14,6 +14,8 @@
 # =========================================================================
 
 import numpy as np
+import json
+import torch
 from torch import nn
 from .pytorch_borzoi_transformer import Attention
 from typing import Union
@@ -392,6 +394,14 @@ def build_block(block_params: dict) -> nn.Module:
 class Borzoi(nn.Module):
     
     def __init__(self, params):
+        """Create a Borzoi model.
+        
+        Arguments:
+        - params: dict, containing keys 'local'/'distal'/'final'/'heads'.
+            Each with specifications for that part of the model, which is passed to self.add_unit.
+            If a str, assumed to be a json containing these params, read with json.load().
+            
+        """
         #TODO support RC and augs, add gradient functions, and much more
         #TODO rename layers to be understandable if I am feeling like adapting the state dict at some point
 
@@ -402,6 +412,9 @@ class Borzoi(nn.Module):
         # Things currently not supported: layer-specific regularisation, separate initializers, global activation/norm_type/bn_momentum setting
 
         super().__init__()
+
+        if isinstance(params, str):
+            params = json.load(params)
 
         # Build local (conv tower)
         self.add_unit('local', params['local'])
@@ -414,9 +427,11 @@ class Borzoi(nn.Module):
 
         # Build heads
         self.heads = nn.ModuleList()
+        self.head_names = []
         for head_name, head_params in params['heads'].items():
             self.add_unit(head_name, head_params)
             self.heads.append(getattr(self, head_name))
+            self.head_names.append(head_name)
     
     def add_unit(self, name: str, unit_params: Union[dict, list[Union[dict, list[dict]]]]):
         """Function to build a borzoi trunk subunit (local/distal/final).
@@ -536,7 +551,24 @@ class Borzoi(nn.Module):
         x = self.final_list[1]((x, skip1))
         x = self.final_list[2](x)
         return x
-        
+    
+    def load_weights(self, path):
+        """Helper function to load weights from file and do some sanity checks."""
+        # Load weights from file
+        state_dict = torch.load(path)
+
+        # Load weights into model
+        # strict = false because otherwise it complains about no values for alternate versions of lists (self.local, self.final) and heads (self.heads)
+        #   which it should copy from the base (self.local_list, self.final_list, self.head_{name}).
+        missing_keys, unexpected_keys = self.load_state_dict(state_dict, strict = False)
+        if len(unexpected_keys) > 0:
+            print(f"Unexpected keys when loading {path}:\n{unexpected_keys}")
+
+        # Check if weights for alternate versions match original
+        assert torch.equal(self.local_list[0][0].weight, self.local[0][0].weight), f"Weights in Borzoi.local_list and Borzoi.local should match. Loading weights probably went wrong."
+        for i, head_name in enumerate(self.head_names):
+            assert torch.equal(self.heads[i][0].weight, getattr(self, head_name)[0].weight), f"Weights in borzoi's {i+1}th head and Borzoi.heads[{i}] should match. Loading weights probably went wrong."
+
 # --------- MISC FUNCTIONS ---------  
 
 def exponential_linspace_int(start, end, num, divisible_by=1):
