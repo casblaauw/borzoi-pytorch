@@ -423,6 +423,8 @@ class Borzoi(nn.Module):
 
         if isinstance(params, str):
             params = json.load(params)
+        else:
+            params = params.copy()
         
         assert all(part in params for part in ['local', 'distal', 'final', 'heads']), "Params should contain 'local'/'distal'/'final'/'heads'."
 
