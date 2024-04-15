@@ -60,28 +60,33 @@ class ConvBlock(nn.Module):
                 padding = 'same')    
             
     def forward(self, x):
+        """Assumes shape (batch, channels, seq_length)."""
         x = self.norm(x)
         x = self.activation(x)
         x = self.conv_layer(x)
         return x
 
 class ConvBlockPool(ConvBlock):
-    def __init__(self, pool_size: int, pool: str = "maxpool1d", **kwargs):
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, pool_size: int, pool: str = "maxpool1d", **kwargs):
         """"A convolution+pooling block, including activation and normalisation pre-conv and max-pooling post-conv.
         
         Arguments:
+        - in_channels: integer, number of input features. 
+            Should be number of preceding output channels/filters.
+        - out_channels: integer, number of filters/kernels/out_channels.
+        - kernel_size: integer, width of each filter.
         - pool_size: integer, width of the max pooling.
         - pool: optional str, pooling function to use. 
             One of "max"/"maxpool1d" or "avg"/"avgpool1d" (case-insensitive). 
             Default: "maxpool1d".
         - **kwargs: passed on to ConvBlock. 
-            Required kwargs for ConvBlock: in_channels: int, out_channels: int, kernel_size: int
             Optional kwargs for ConvBlock: activation: str = "gelu", norm: str = "batchnorm", conv_type: str = "standard"
         """
-        super().__init__(**kwargs)
+        super().__init__(in_channels = in_channels, out_channels = out_channels, kernel_size = kernel_size, **kwargs)
         self.pool = get_pooling(type = pool, pool_size = pool_size)
     
     def forward(self, x):
+        """Assumes shape (batch, channels, seq_length)."""
         x = self.norm(x)
         x = self.activation(x)
         x = self.conv_layer(x)
@@ -117,6 +122,7 @@ class Upscale(nn.Module):
         self.conv_sep = ConvBlock(in_channels = intermed_channels, out_channels = out_channels, kernel_size = kernel_size, conv_type = 'separable')
 
     def forward(self, inputs):
+        """Assumes shape (batch, channels, seq_length)."""
         x, y = inputs
         x = self.conv_input(x)
         x = self.upsample(x)
@@ -162,6 +168,7 @@ class MHABlock(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
+        """Assumes shape (batch, seq_length, channels)."""
         x = self.norm(x)
         x = self.attention(x)
         x = self.dropout(x)
@@ -187,6 +194,7 @@ class FeedForward(nn.Module):
         self.l2 = nn.Linear(dim * 2, dim)
 
     def forward(self, x):
+        """Assumes shape (batch, seq_length, channels)."""
         x = self.norm(x)
         x = self.l1(x)
         x = self.dropout(x)
@@ -196,7 +204,7 @@ class FeedForward(nn.Module):
         return x
     
 class Transformer(nn.Module):
-    def __init__(self, **kwargs): 
+    def __init__(self, dim: int, key_size: int, heads: int, num_position_features: int, dropout: float, **kwargs): 
         """Transformer (residual MHABlock + residual FFN) block. 
         Arguments are the same as MHABlock, with dim and dropout also used for FeedForward.
         
@@ -206,14 +214,17 @@ class Transformer(nn.Module):
         - heads: int, number of heads in multi-head attention layer.
         - num_position_features: int, number of relative positional features in the attention layer. 
         - dropout: float, dropout to use in the separate dropout layer AFTER attention and in the feedforward block.
-        - attention_dropout: float, dropout to use for attention WITHIN the attention layer.
-        - position_dropout: float, dropout to use for position encoding WITHIN the attention layer.
+        - **kwargs: passed on to MHABlock. 
+            Optional kwargs for MHABlock: 
+            - attention_dropout: optional float, dropout to use for attention WITHIN the attention layer.
+            - position_dropout: optional float, dropout to use for position encoding WITHIN the attention layer.
         """
         super().__init__()
-        self.transf = MHABlock(**kwargs)
-        self.ff = FeedForward(dim = kwargs['dim'], dropout = kwargs['dropout'])
+        self.transf = MHABlock(dim = dim, key_size = key_size, heads = heads, num_position_features = num_position_features, dropout = dropout**kwargs)
+        self.ff = FeedForward(dim = dim, dropout = dropout)
     
     def forward(self, x):
+        """Assumes shape (batch, seq_length, channels)."""
         x2 = self.transf(x)
         x += x2
         x3 = self.ff(x)
@@ -250,6 +261,8 @@ class TargetLengthCrop(nn.Module):
         self.target_length = target_length
 
     def forward(self, x):
+        """Assumes shape (..., L) i.e. (batch, channels, seq_length).
+        """
         seq_len, target_len = x.shape[-1], self.target_length
         if target_len == -1:
             return x
@@ -258,9 +271,8 @@ class TargetLengthCrop(nn.Module):
         trim = (target_len - seq_len) // 2
         if trim == 0:
             return x
-        return x[:, :, -trim:trim]
+        return x[..., -trim:trim]
         
-
 
 # --------- CONSTRUCTION FUNCTIONS ---------   
     
@@ -402,12 +414,9 @@ class Borzoi(nn.Module):
             If a str, assumed to be a json containing these params, read with json.load().
             
         """
-        #TODO support RC and augs, add gradient functions, and much more
-
-        # TODO CAS: add shape expectations to block docs
-        # TODO CAS: move required kwargs to actual params
-
+        # TODO: port attention to use new pytorch features (F.scaled_dot_product_attention?)   
         # Things currently not supported: layer-specific regularisation, separate initializers, global activation/norm_type/bn_momentum setting
+        #   Global parameters (l2-scale, )
 
         super().__init__()
 
@@ -519,7 +528,9 @@ class Borzoi(nn.Module):
                 
         
     def forward(self, x):
-        """Forward pass through the model. Always assumes (batch, )"""
+        """Forward pass through the model. 
+        Always assumes (batch, channels, seq_length), i.e. (batch, 4, seq_length).
+        """
         # Pass through local, saving skip/horizontal tensors
         skip1 = self.local_list[0](x)
         skip2 = self.local_list[1](skip1)
