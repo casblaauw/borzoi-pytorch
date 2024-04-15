@@ -1,13 +1,9 @@
 import numpy as np
 import torch
 
-def predict_tracks(models, sequence_one_hot, slices):
-    predicted_tracks = []
-    for fold_ix in range(len(models)):
-        with torch.no_grad():
-            yh = models[fold_ix](sequence_one_hot[None, ...])[:, None, ...].numpy(force = True)[:,:,slices]
-        predicted_tracks.append(yh)
-
-    predicted_tracks = np.concatenate(predicted_tracks,axis=1).swapaxes(3,2)
-
-    return predicted_tracks
+def predict_tracks(models, sequence_one_hot, head_i, slices):
+    if sequence_one_hot.ndim == 2:
+        sequence_one_hot = sequence_one_hot[None, ...]
+    with torch.no_grad():
+        predicted_tracks = [m(sequence_one_hot)[head_i].numpy(force=True)[:, slices, :] for m in models]
+    return np.concatenate(predicted_tracks, axis = 0)
