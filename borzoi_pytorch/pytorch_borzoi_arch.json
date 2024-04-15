@@ -2,10 +2,11 @@
     "local": [
         [
             {
-                "name": "Conv1D",
+                "name": "Conv1d",
                 "in_channels": 4,
                 "out_channels": 512,
-                "kernel_size": 15
+                "kernel_size": 15,
+                "padding": "same"
             },
             {
                 "name": "pooling",
@@ -84,7 +85,7 @@
             {
                 "name": "Upscale",
                 "in_channels": 1536,
-                "horizontal_in_channels": 1280,
+                "horizontal_in_channels": 1536,
                 "intermed_channels": 1536,
                 "out_channels": 1536,
                 "kernel_size": 3 
@@ -94,7 +95,7 @@
             {
                 "name": "Upscale",
                 "in_channels": 1536,
-                "horizontal_in_channels": 1536,
+                "horizontal_in_channels": 1280,
                 "intermed_channels": 1536,
                 "out_channels": 1536,
                 "kernel_size": 3 
@@ -125,9 +126,10 @@
     "heads": {
         "head_human": [
             {
-                "name": "Conv1D",
+                "name": "Conv1d",
                 "in_channels": 1920,
-                "out_channels": 7611
+                "out_channels": 7611,
+                "kernel_size": 1
             }, 
             {
                 "name": "activation",
@@ -136,9 +138,10 @@
         ],
         "head_mouse": [
             {
-                "name": "Conv1D",
+                "name": "Conv1d",
                 "in_channels": 1920,
-                "out_channels": 2608
+                "out_channels": 2608,
+                "kernel_size": 1
             }, 
             {
                 "name": "activation",
@@ -147,9 +150,10 @@
         ],
         "head_new": [
             {
-                "name": "Conv1D",
+                "name": "Conv1d",
                 "in_channels": 1920,
-                "out_channels": 5
+                "out_channels": 5,
+                "kernel_size": 1
             }, 
             {
                 "name": "activation",

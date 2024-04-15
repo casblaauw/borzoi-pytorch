@@ -14,6 +14,8 @@
 # =========================================================================
 
 import numpy as np
+import json
+import torch
 from torch import nn
 from .pytorch_borzoi_transformer import Attention
 from typing import Union
@@ -58,13 +60,14 @@ class ConvBlock(nn.Module):
                 padding = 'same')    
             
     def forward(self, x):
+        """Assumes shape (batch, channels, seq_length)."""
         x = self.norm(x)
         x = self.activation(x)
         x = self.conv_layer(x)
         return x
 
 class ConvBlockPool(ConvBlock):
-    def __init__(self, **kwargs):
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, pool_size: int, pool: str = "maxpool1d", **kwargs):
         """"A convolution+pooling block, including activation and normalisation pre-conv and max-pooling post-conv.
         
         Arguments:
@@ -73,23 +76,17 @@ class ConvBlockPool(ConvBlock):
         - out_channels: integer, number of filters/kernels/out_channels.
         - kernel_size: integer, width of each filter.
         - pool_size: integer, width of the max pooling.
-        - activation: str, activation function to use. 
-            One of "gelu",  "relu", "linear", "softplus" (case-insensitive). 
-            Only used with conv_type "standard". 
-            Default: "gelu".
-        - norm: optional str, type of normalisation to use, either "batchnorm" or "layernorm". 
-            Default: "batchnorm".
         - pool: optional str, pooling function to use. 
             One of "max"/"maxpool1d" or "avg"/"avgpool1d" (case-insensitive). 
             Default: "maxpool1d".
-        - conv_type: optional str, either "standard" or "separable".
-            Default: "standard".
+        - **kwargs: passed on to ConvBlock. 
+            Optional kwargs for ConvBlock: activation: str = "gelu", norm: str = "batchnorm", conv_type: str = "standard"
         """
-        pool, pool_size = kwargs.pop('pool'), kwargs.pop('pool_size')
-        super().__init__(**kwargs)
+        super().__init__(in_channels = in_channels, out_channels = out_channels, kernel_size = kernel_size, **kwargs)
         self.pool = get_pooling(type = pool, pool_size = pool_size)
     
     def forward(self, x):
+        """Assumes shape (batch, channels, seq_length)."""
         x = self.norm(x)
         x = self.activation(x)
         x = self.conv_layer(x)
@@ -125,6 +122,7 @@ class Upscale(nn.Module):
         self.conv_sep = ConvBlock(in_channels = intermed_channels, out_channels = out_channels, kernel_size = kernel_size, conv_type = 'separable')
 
     def forward(self, inputs):
+        """Assumes shape (batch, channels, seq_length)."""
         x, y = inputs
         x = self.conv_input(x)
         x = self.upsample(x)
@@ -166,10 +164,11 @@ class MHABlock(nn.Module):
                     dropout = attention_dropout,
                     pos_dropout = position_dropout,
                     num_rel_pos_features = num_position_features
-                ),
+                )
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
+        """Assumes shape (batch, seq_length, channels)."""
         x = self.norm(x)
         x = self.attention(x)
         x = self.dropout(x)
@@ -189,12 +188,13 @@ class FeedForward(nn.Module):
         """
         super().__init__()
         self.norm = get_norm(norm, in_channels = dim, eps = 0.001)
-        self.l1 = nn.Linear(dim, dim * 2),
-        self.dropout = nn.Dropout(dropout),
+        self.l1 = nn.Linear(dim, dim * 2)
+        self.dropout = nn.Dropout(dropout)
         self.activation = get_activation(activation)
-        self.l2 = nn.Linear(dim * 2, dim),
+        self.l2 = nn.Linear(dim * 2, dim)
 
     def forward(self, x):
+        """Assumes shape (batch, seq_length, channels)."""
         x = self.norm(x)
         x = self.l1(x)
         x = self.dropout(x)
@@ -204,7 +204,7 @@ class FeedForward(nn.Module):
         return x
     
 class Transformer(nn.Module):
-    def __init__(self, **kwargs): 
+    def __init__(self, dim: int, key_size: int, heads: int, num_position_features: int, dropout: float, **kwargs): 
         """Transformer (residual MHABlock + residual FFN) block. 
         Arguments are the same as MHABlock, with dim and dropout also used for FeedForward.
         
@@ -214,16 +214,17 @@ class Transformer(nn.Module):
         - heads: int, number of heads in multi-head attention layer.
         - num_position_features: int, number of relative positional features in the attention layer. 
         - dropout: float, dropout to use in the separate dropout layer AFTER attention and in the feedforward block.
-        - attention_dropout: float, dropout to use for attention WITHIN the attention layer.
-        - position_dropout: float, dropout to use for position encoding WITHIN the attention layer.
-        - norm: optional str, norm to use in BOTH MHA and FFN blocks, either "layernorm"/"batchnorm".
-            Default is "layernorm", as in Borzoi and original Transformer paper. 
+        - **kwargs: passed on to MHABlock. 
+            Optional kwargs for MHABlock: 
+            - attention_dropout: optional float, dropout to use for attention WITHIN the attention layer.
+            - position_dropout: optional float, dropout to use for position encoding WITHIN the attention layer.
         """
         super().__init__()
-        self.transf = MHABlock(**kwargs)
-        self.ff = FeedForward(dim = kwargs['dim'], dropout = kwargs['dropout'], norm = kwargs['norm'])
+        self.transf = MHABlock(dim = dim, key_size = key_size, heads = heads, num_position_features = num_position_features, dropout = dropout**kwargs)
+        self.ff = FeedForward(dim = dim, dropout = dropout)
     
     def forward(self, x):
+        """Assumes shape (batch, seq_length, channels)."""
         x2 = self.transf(x)
         x += x2
         x3 = self.ff(x)
@@ -260,6 +261,8 @@ class TargetLengthCrop(nn.Module):
         self.target_length = target_length
 
     def forward(self, x):
+        """Assumes shape (..., L) i.e. (batch, channels, seq_length).
+        """
         seq_len, target_len = x.shape[-1], self.target_length
         if target_len == -1:
             return x
@@ -268,9 +271,8 @@ class TargetLengthCrop(nn.Module):
         trim = (target_len - seq_len) // 2
         if trim == 0:
             return x
-        return x[:, -trim:trim, :]
+        return x[..., -trim:trim]
         
-
 
 # --------- CONSTRUCTION FUNCTIONS ---------   
     
@@ -323,7 +325,7 @@ def get_activation(type: str) -> nn.Module:
     if type == "gelu":
         return nn.GELU(approximate = 'tanh')
     elif type == "relu":
-        return nn.RELU()
+        return nn.ReLU()
     elif type == "linear":
         return nn.Identity()
     elif type == "softplus":
@@ -339,7 +341,7 @@ def get_pooling(type: str, pool_size: int) -> nn.Module:
     """
     type = type.lower()
     if type == "maxpool1d" or type == "max":
-        return nn.MaxPool1D(kernel_size = pool_size, padding = 0)
+        return nn.MaxPool1d(kernel_size = pool_size, padding = 0)
     elif type == "avgpool1d" or type == "avg":
         return nn.AvgPool1d(kernel_size = pool_size, padding = 0)
     else:
@@ -357,14 +359,14 @@ def get_norm(type: str, in_channels: int, eps: float = 0.001):
     type = type.lower()
     if type in ["batch", "batchnorm", "batchnorm1d", "batch-norm"]:
         return nn.BatchNorm1d(in_channels, eps = eps)
-    elif type in ["layer, layernorm", "layer-norm"]:
+    elif type in ["layer", "layernorm", "layer-norm"]:
         return nn.LayerNorm(in_channels, eps = eps)
     else:
         raise ValueError(f"Did not recognise norm function type {type}.")
 
 
 function_mapping = {
-    "Conv1D": nn.Conv1D,
+    "Conv1d": nn.Conv1d,
     "ConvBlock": ConvBlock,
     "ConvBlockPool": ConvBlockPool,
     "Upscale": Upscale,
@@ -404,15 +406,27 @@ def build_block(block_params: dict) -> nn.Module:
 class Borzoi(nn.Module):
     
     def __init__(self, params):
-        #TODO support RC and augs, add gradient functions, and much more
-        #TODO rename layers to be understandable if I am feeling like adapting the state dict at some point
+        """Create a Borzoi model.
+        
+        Arguments:
+        - params: dict, containing keys 'local'/'distal'/'final'/'heads'.
+            Each with specifications for that part of the model, which is passed to self.add_unit.
+            If a str, assumed to be a json containing these params, read with json.load().
+            
+        """
+        # TODO: port attention to use new pytorch features (F.scaled_dot_product_attention?)
 
-        # TODO CAS: add named variables
-        # TODO CAS: add shape expectations to block docs
-
-        # Things currently not supported: layer-specific regularisation, separate initializers, global activation/norm_type/bn_momentum setting
+        # Features currently not supported: layer-specific regularisation, separate initializers, setting activation/norm_type/bn_momentum for all layers
+        # Model-wide parameters (l2-scale, syncing batchnorm) should be set in your training code.
 
         super().__init__()
+
+        if isinstance(params, str):
+            params = json.load(params)
+        else:
+            params = params.copy()
+        
+        assert all(part in params for part in ['local', 'distal', 'final', 'heads']), "Params should contain 'local'/'distal'/'final'/'heads'."
 
         # Build local (conv tower)
         self.add_unit('local', params['local'])
@@ -425,9 +439,11 @@ class Borzoi(nn.Module):
 
         # Build heads
         self.heads = nn.ModuleList()
-        for head_name, head_params in params['heads']:
+        self.head_names = []
+        for head_name, head_params in params['heads'].items():
             self.add_unit(head_name, head_params)
             self.heads.append(getattr(self, head_name))
+            self.head_names.append(head_name)
     
     def add_unit(self, name: str, unit_params: Union[dict, list[Union[dict, list[dict]]]]):
         """Function to build a borzoi trunk subunit (local/distal/final).
@@ -515,10 +531,14 @@ class Borzoi(nn.Module):
                 
         
     def forward(self, x):
+        """Forward pass through the model. 
+        Always assumes (batch, seq_len, channels), i.e. (batch, seq_length, 4).
+        """
         # Pass through local, saving skip/horizontal tensors
+        x = x.permute(0,2,1)
         skip1 = self.local_list[0](x)
-        skip2 = self.local_list[1](x)
-        x = self.local_list[2](x)
+        skip2 = self.local_list[1](skip1)
+        x = self.local_list[2](skip2)
 
         # Pass through transformer layer
         x = x.permute(0,2,1)
@@ -531,13 +551,13 @@ class Borzoi(nn.Module):
         x = self.final_list[2](x)
 
         # Head
-        return (head(x) for head in self.heads)
+        return [head(x) for head in self.heads]
     
     def forward_trunk(self, x):
         # Local
         skip1 = self.local_list[0](x)
-        skip2 = self.local_list[1](x)
-        x = self.local_list[2](x)
+        skip2 = self.local_list[1](skip1)
+        x = self.local_list[2](skip2)
         # Distal
         x = x.permute(0,2,1)
         x = self.distal(x)
@@ -547,7 +567,24 @@ class Borzoi(nn.Module):
         x = self.final_list[1]((x, skip1))
         x = self.final_list[2](x)
         return x
-        
+    
+    def load_weights(self, path):
+        """Helper function to load weights from file and do some sanity checks."""
+        # Load weights from file
+        state_dict = torch.load(path)
+
+        # Load weights into model
+        # strict = false because otherwise it complains about no values for alternate versions of lists (self.local, self.final) and heads (self.heads)
+        #   which it should copy from the base (self.local_list, self.final_list, self.head_{name}).
+        missing_keys, unexpected_keys = self.load_state_dict(state_dict, strict = False)
+        if len(unexpected_keys) > 0:
+            print(f"Unexpected keys when loading {path}:\n{unexpected_keys}")
+
+        # Check if weights for alternate versions match original
+        assert torch.equal(self.local_list[0][0].weight, self.local[0][0].weight), f"Weights in Borzoi.local_list and Borzoi.local should match. Loading weights probably went wrong."
+        for i, head_name in enumerate(self.head_names):
+            assert torch.equal(self.heads[i][0].weight, getattr(self, head_name)[0].weight), f"Weights in borzoi's {i+1}th head and Borzoi.heads[{i}] should match. Loading weights probably went wrong."
+
 # --------- MISC FUNCTIONS ---------  
 
 def exponential_linspace_int(start, end, num, divisible_by=1):
