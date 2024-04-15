@@ -414,9 +414,10 @@ class Borzoi(nn.Module):
             If a str, assumed to be a json containing these params, read with json.load().
             
         """
-        # TODO: port attention to use new pytorch features (F.scaled_dot_product_attention?)   
-        # Things currently not supported: layer-specific regularisation, separate initializers, global activation/norm_type/bn_momentum setting
-        #   Global parameters (l2-scale, )
+        # TODO: port attention to use new pytorch features (F.scaled_dot_product_attention?)
+
+        # Features currently not supported: layer-specific regularisation, separate initializers, setting activation/norm_type/bn_momentum for all layers
+        # Model-wide parameters (l2-scale, syncing batchnorm) should be set in your training code.
 
         super().__init__()
 
@@ -529,9 +530,10 @@ class Borzoi(nn.Module):
         
     def forward(self, x):
         """Forward pass through the model. 
-        Always assumes (batch, channels, seq_length), i.e. (batch, 4, seq_length).
+        Always assumes (batch, seq_len, channels), i.e. (batch, seq_length, 4).
         """
         # Pass through local, saving skip/horizontal tensors
+        x = x.permute(0,2,1)
         skip1 = self.local_list[0](x)
         skip2 = self.local_list[1](skip1)
         x = self.local_list[2](skip2)
