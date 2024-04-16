@@ -19,6 +19,7 @@ import torch
 from torch import nn
 from .pytorch_borzoi_transformer import Attention
 from typing import Union
+from copy import deepcopy
 
 #torch.backends.cudnn.deterministic = True
 
@@ -424,7 +425,7 @@ class Borzoi(nn.Module):
         if isinstance(params, str):
             params = json.load(params)
         else:
-            params = params.copy()
+            params = deepcopy(params)
         
         assert all(part in params for part in ['local', 'distal', 'final', 'heads']), "Params should contain 'local'/'distal'/'final'/'heads'."
 
