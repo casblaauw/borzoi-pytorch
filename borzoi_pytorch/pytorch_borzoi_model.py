@@ -220,7 +220,7 @@ class Transformer(nn.Module):
             - position_dropout: optional float, dropout to use for position encoding WITHIN the attention layer.
         """
         super().__init__()
-        self.transf = MHABlock(dim = dim, key_size = key_size, heads = heads, num_position_features = num_position_features, dropout = dropout**kwargs)
+        self.transf = MHABlock(dim = dim, key_size = key_size, heads = heads, num_position_features = num_position_features, dropout = dropout, **kwargs)
         self.ff = FeedForward(dim = dim, dropout = dropout)
     
     def forward(self, x):
