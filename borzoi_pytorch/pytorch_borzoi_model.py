@@ -20,6 +20,7 @@ from torch import nn
 from .pytorch_borzoi_transformer import Attention
 from typing import Union
 from copy import deepcopy
+import warnings
 
 #torch.backends.cudnn.deterministic = True
 
@@ -426,25 +427,37 @@ class Borzoi(nn.Module):
             params = json.load(params)
         else:
             params = deepcopy(params)
-        
-        assert all(part in params for part in ['local', 'distal', 'final', 'heads']), "Params should contain 'local'/'distal'/'final'/'heads'."
+
+        assert any(part in params for part in ['local', 'distal', 'final', 'heads']), "Params should contain at least one of 'local'/'distal'/'final'/'heads'."
 
         # Build local (conv tower)
-        self.add_unit('local', params['local'])
+        if 'local' in params:
+            self.add_unit('local', params['local'])
+        else:
+            warnings.warn(f"Your parameters do not contain a 'local' section, which is expected. Skipping building local. Found sections: {params.keys()}")
 
         # Build distal (transformer tower)
-        self.add_unit('distal', params['distal'])
+        if 'distal' in params:
+            self.add_unit('distal', params['distal'])
+        else:
+            warnings.warn(f"Your parameters do not contain a 'distal' section, which is expected. Skipping building distal. Found sections: {params.keys()}")
 
         # Build final of trunk (Upsampling/crop/pointwise)
-        self.add_unit('final', params['final'])
+        if 'final' in params:
+            self.add_unit('final', params['final'])
+        else:
+            warnings.warn(f"Your parameters do not contain a 'final' section, which is expected. Skipping building final. Found sections: {params.keys()}")
 
         # Build heads
-        self.heads = nn.ModuleList()
-        self.head_names = []
-        for head_name, head_params in params['heads'].items():
-            self.add_unit(head_name, head_params)
-            self.heads.append(getattr(self, head_name))
-            self.head_names.append(head_name)
+        if 'heads' in params:
+            self.heads = nn.ModuleList()
+            self.head_names = []
+            for head_name, head_params in params['heads'].items():
+                self.add_unit(head_name, head_params)
+                self.heads.append(getattr(self, head_name))
+                self.head_names.append(head_name)
+        else:
+            warnings.warn(f"Your parameters do not contain a 'heads' section, which is expected.  Skipping building heads. Found sections: {params.keys()}")
     
     def add_unit(self, name: str, unit_params: Union[dict, list[Union[dict, list[dict]]]]):
         """Function to build a borzoi trunk subunit (local/distal/final).
