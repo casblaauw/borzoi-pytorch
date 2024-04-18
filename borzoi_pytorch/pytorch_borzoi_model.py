@@ -18,7 +18,6 @@ import json
 import torch
 from torch import nn
 from .pytorch_borzoi_transformer import Attention
-from typing import Union
 from copy import deepcopy
 import warnings
 
@@ -459,7 +458,7 @@ class Borzoi(nn.Module):
         else:
             warnings.warn(f"Your parameters do not contain a 'heads' section, which is expected.  Skipping building heads. Found sections: {params.keys()}")
     
-    def add_unit(self, name: str, unit_params: Union[dict, list[Union[dict, list[dict]]]]):
+    def add_unit(self, name: str, unit_params):
         """Function to build a borzoi trunk subunit (local/distal/final).
         Adds self.{name} to the model object as a Sequential.
         If the subunit has sublists, those are also made individual Sequentials and saved to self.{name}_list, with self.name as a wrapper.
