@@ -423,7 +423,8 @@ class Borzoi(nn.Module):
         super().__init__()
 
         if isinstance(params, str):
-            params = json.load(params)
+            with open(params) as params_file:
+                params = json.load(params_file)
         else:
             params = deepcopy(params)
 
